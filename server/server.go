@@ -4,7 +4,6 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
-	"github.com/davecgh/go-spew/spew"
 	wire "github.com/jeroenrinzema/psql-wire"
 	_ "github.com/lib/pq"
 	"github.com/lib/pq/oid"
@@ -22,7 +21,7 @@ type QueryFuncs struct {
 	queryHandler        wire.PreparedStatementFn
 	queryColumnsHandler QueryColumnsHandler
 }
-type QueryColumnsHandler func(ctx context.Context, query string) wire.Columns
+type QueryColumnsHandler func(ctx context.Context, query string) (wire.Columns, error)
 type QueryHandler func(ctx context.Context, query string) QueryFuncs
 
 func NewServer(port int, server string) (*Server, error) {
@@ -40,67 +39,83 @@ func NewServer(port int, server string) (*Server, error) {
 }
 
 func (s *Server) Run() error {
-	wire.ListenAndServe(s.address, s.handler)
-	return nil
+	return wire.ListenAndServe(s.address, s.handler)
 }
 
-func (s *Server) selectQueryHandler(ctx context.Context, query string) QueryFuncs {
+func (s *Server) anonymizeValue(value any, columnName string, columnType *sql.ColumnType) any {
+	// TODO: flesh out anonymization logic to be data driven
+	if columnName == "email" && columnType.DatabaseTypeName() == "VARCHAR" {
+		return "anon@anon.com"
+	}
+	return value
+}
+
+func (s *Server) selectQueryHandler(_ context.Context, query string) QueryFuncs {
+
 	statementHandler := func(ctx context.Context, writer wire.DataWriter, parameters []string) error {
 		rows, err := s.db.Query(query)
-		defer rows.Close()
+		defer func() {
+			err = rows.Close()
+		}()
 		if err != nil {
 			return err
 		}
 
-		columns, _ := rows.Columns()
+		columns, err := rows.Columns()
+		if err != nil {
+			return err
+		}
+
+		columnTypes, err := rows.ColumnTypes()
+		if err != nil {
+			return err
+		}
+
 		count := len(columns)
 		values := make([]any, count)
-		valuePtrs := make([]interface{}, count)
+		valuePointers := make([]interface{}, count)
 		for i := range values {
-			valuePtrs[i] = &values[i]
-		}
-		for rows.Next() {
-			_ = rows.Scan(valuePtrs...)
-			for i, val := range values {
-				if val == nil {
-					values[i] = "NULL"
-				}
-			}
-			spew.Dump(values)
-			writer.Row(values)
-			writer.Row([]any{1, "Marry", "password", "email"})
+			valuePointers[i] = &values[i]
 		}
 
-		return writer.Complete("SELECT 2")
+		numRows := 0
+		for rows.Next() {
+			_ = rows.Scan(valuePointers...)
+			for i, val := range values {
+				values[i] = s.anonymizeValue(val, columns[i], columnTypes[i])
+			}
+			err = writer.Row(values)
+			if err != nil {
+				return err
+			}
+			numRows += 1
+		}
+
+		return writer.Complete(fmt.Sprintf("SELECT %d", numRows))
 	}
 
-	columnHandler := func(ctx context.Context, query string) wire.Columns {
+	columnHandler := func(ctx context.Context, query string) (wire.Columns, error) {
 		rows, err := s.db.Query(query)
-		defer rows.Close()
+		defer func() {
+			err = rows.Close()
+		}()
 		if err != nil {
-			panic(err)
+			return nil, err
 		}
 
 		cols, _ := rows.Columns()
+		colTypes, _ := rows.ColumnTypes()
 		cols2 := make(wire.Columns, 0, len(cols))
-		fmt.Println("got columns")
-		for _, col := range cols {
-			cols2 = append(cols2, wire.Column{
-				Name:   col,
-				Oid:    oid.T_text,
-				Width:  1,
-				Format: wire.TextFormat,
-			})
-			fmt.Println(col)
+		for i, name := range cols {
+			cols2 = append(cols2, wireColumn(name, *colTypes[i]))
 		}
-		fmt.Println()
-		return cols2
+		return cols2, nil
 	}
 
 	return QueryFuncs{statementHandler, columnHandler}
 }
 
-func (s *Server) defaultHandler(ctx context.Context, query string) QueryFuncs {
+func (s *Server) defaultHandler(_ context.Context, query string) QueryFuncs {
 	f := func(ctx context.Context, writer wire.DataWriter, parameters []string) error {
 		_, err := s.db.Exec(query)
 		if err != nil {
@@ -109,8 +124,8 @@ func (s *Server) defaultHandler(ctx context.Context, query string) QueryFuncs {
 		return writer.Complete("OK")
 	}
 
-	columnsFunc := func(ctx context.Context, query string) wire.Columns {
-		return wire.Columns{}
+	columnsFunc := func(ctx context.Context, query string) (wire.Columns, error) {
+		return wire.Columns{}, nil
 	}
 	return QueryFuncs{f, columnsFunc}
 }
@@ -125,6 +140,10 @@ func (s *Server) handler(ctx context.Context, query string) (wire.PreparedStatem
 		DROP:   s.defaultHandler(ctx, query),
 	}
 	queryFuncs := handlers[getQueryType(query)]
+	columns, err := queryFuncs.queryColumnsHandler(ctx, query)
+	if err != nil {
+		return nil, nil, nil, err
+	}
 
-	return queryFuncs.queryHandler, wire.ParseParameters(query), queryFuncs.queryColumnsHandler(ctx, query), nil
+	return queryFuncs.queryHandler, wire.ParseParameters(query), columns, nil
 }
