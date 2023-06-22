@@ -4,50 +4,127 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"github.com/davecgh/go-spew/spew"
+	wire "github.com/jeroenrinzema/psql-wire"
+	_ "github.com/lib/pq"
+	"github.com/lib/pq/oid"
 	"log"
-	"net"
-	"sync"
 )
 
 type Server struct {
-	Port int
-	db   *sql.DB
-
-	wg       sync.WaitGroup
-	listener net.Listener
+	port    int
+	address string
+	db      *sql.DB
+	dbURL   string
 }
 
-func (s *Server) handleNewClientConnection(conn net.Conn) {
-	s.wg.Add(1)
-	defer s.wg.Done()
-	defer conn.Close()
-
-	c, f := context.WithCancel(context.Background())
-	handler := &ClientHandler{
-		ClientConn: conn,
-		Context:    c,
-		Cancel:     f,
-		AuthPhase:  PhaseStartup,
-	}
-	handler.handle()
+type QueryFuncs struct {
+	queryHandler        wire.PreparedStatementFn
+	queryColumnsHandler QueryColumnsHandler
 }
+type QueryColumnsHandler func(ctx context.Context, query string) wire.Columns
+type QueryHandler func(ctx context.Context, query string) QueryFuncs
 
-func (s *Server) Listen() error {
-	log.Println("listening on port", s.Port)
-
-	// build listener
-	portStr := fmt.Sprintf(":%d", s.Port)
-	ln, err := net.Listen("tcp", portStr)
+func NewServer(port int, server string) (*Server, error) {
+	db, err := sql.Open("postgres", server)
 	if err != nil {
-		return err
+		log.Fatal(err)
 	}
-	s.listener = ln
-	for {
-		conn, err := ln.Accept()
+
+	return &Server{
+		port:    port,
+		address: fmt.Sprintf("127.0.0.1:%d", port),
+		db:      db,
+		dbURL:   server,
+	}, nil
+}
+
+func (s *Server) Run() error {
+	wire.ListenAndServe(s.address, s.handler)
+	return nil
+}
+
+func (s *Server) selectQueryHandler(ctx context.Context, query string) QueryFuncs {
+	statementHandler := func(ctx context.Context, writer wire.DataWriter, parameters []string) error {
+		rows, err := s.db.Query(query)
+		defer rows.Close()
 		if err != nil {
 			return err
 		}
-		go s.handleNewClientConnection(conn)
+
+		columns, _ := rows.Columns()
+		count := len(columns)
+		values := make([]any, count)
+		valuePtrs := make([]interface{}, count)
+		for i := range values {
+			valuePtrs[i] = &values[i]
+		}
+		for rows.Next() {
+			_ = rows.Scan(valuePtrs...)
+			for i, val := range values {
+				if val == nil {
+					values[i] = "NULL"
+				}
+			}
+			spew.Dump(values)
+			writer.Row(values)
+			writer.Row([]any{1, "Marry", "password", "email"})
+		}
+
+		return writer.Complete("SELECT 2")
 	}
-	return nil
+
+	columnHandler := func(ctx context.Context, query string) wire.Columns {
+		rows, err := s.db.Query(query)
+		defer rows.Close()
+		if err != nil {
+			panic(err)
+		}
+
+		cols, _ := rows.Columns()
+		cols2 := make(wire.Columns, 0, len(cols))
+		fmt.Println("got columns")
+		for _, col := range cols {
+			cols2 = append(cols2, wire.Column{
+				Name:   col,
+				Oid:    oid.T_text,
+				Width:  1,
+				Format: wire.TextFormat,
+			})
+			fmt.Println(col)
+		}
+		fmt.Println()
+		return cols2
+	}
+
+	return QueryFuncs{statementHandler, columnHandler}
+}
+
+func (s *Server) defaultHandler(ctx context.Context, query string) QueryFuncs {
+	f := func(ctx context.Context, writer wire.DataWriter, parameters []string) error {
+		_, err := s.db.Exec(query)
+		if err != nil {
+			return err
+		}
+		return writer.Complete("OK")
+	}
+
+	columnsFunc := func(ctx context.Context, query string) wire.Columns {
+		return wire.Columns{}
+	}
+	return QueryFuncs{f, columnsFunc}
+}
+
+func (s *Server) handler(ctx context.Context, query string) (wire.PreparedStatementFn, []oid.Oid, wire.Columns, error) {
+	handlers := map[QueryType]QueryFuncs{
+		CREATE: s.defaultHandler(ctx, query),
+		INSERT: s.defaultHandler(ctx, query),
+		SELECT: s.selectQueryHandler(ctx, query),
+		UPDATE: s.defaultHandler(ctx, query),
+		DELETE: s.defaultHandler(ctx, query),
+		DROP:   s.defaultHandler(ctx, query),
+	}
+	queryFuncs := handlers[getQueryType(query)]
+
+	return queryFuncs.queryHandler, wire.ParseParameters(query), queryFuncs.queryColumnsHandler(ctx, query), nil
 }
