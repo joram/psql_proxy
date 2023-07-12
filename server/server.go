@@ -15,6 +15,7 @@ type Server struct {
 	address string
 	db      *sql.DB
 	dbURL   string
+	config  *Conf
 }
 
 type QueryFuncs struct {
@@ -24,30 +25,25 @@ type QueryFuncs struct {
 type QueryColumnsHandler func(ctx context.Context, query string) (wire.Columns, error)
 type QueryHandler func(ctx context.Context, query string) QueryFuncs
 
-func NewServer(port int, server string) (*Server, error) {
-	db, err := sql.Open("postgres", server)
+func NewServer() (*Server, error) {
+	config := GetConfig()
+
+	db, err := sql.Open("postgres", config.ServerURI)
 	if err != nil {
 		log.Fatal(err)
 	}
 
 	return &Server{
-		port:    port,
-		address: fmt.Sprintf("127.0.0.1:%d", port),
+		config:  config,
+		port:    config.Port,
+		address: fmt.Sprintf("127.0.0.1:%d", config.Port),
 		db:      db,
-		dbURL:   server,
+		dbURL:   config.ServerURI,
 	}, nil
 }
 
 func (s *Server) Run() error {
 	return wire.ListenAndServe(s.address, s.handler)
-}
-
-func (s *Server) anonymizeValue(value any, columnName string, columnType *sql.ColumnType) any {
-	// TODO: flesh out anonymization logic to be data driven
-	if columnName == "email" && columnType.DatabaseTypeName() == "VARCHAR" {
-		return "anon@anon.com"
-	}
-	return value
 }
 
 func (s *Server) selectQueryHandler(_ context.Context, query string) QueryFuncs {
@@ -82,7 +78,11 @@ func (s *Server) selectQueryHandler(_ context.Context, query string) QueryFuncs 
 		for rows.Next() {
 			_ = rows.Scan(valuePointers...)
 			for i, val := range values {
-				values[i] = s.anonymizeValue(val, columns[i], columnTypes[i])
+				values[i] = s.config.Anonymize(
+					columns[i],
+					columnTypes[i],
+					val,
+				)
 			}
 			err = writer.Row(values)
 			if err != nil {
