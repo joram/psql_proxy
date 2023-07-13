@@ -8,14 +8,6 @@ import (
 	"io/ioutil"
 )
 
-var functions = map[string]AnonymizingFunction{
-	"email":             email,
-	"password.stars":    passwordStars,
-	"name.first.dwarf":  nameFirstDwarf,
-	"name.middle.dwarf": nameMiddleDwarf,
-	"name.last.dwarf":   nameLastDwarf,
-}
-
 type Column struct {
 	Name         string `yaml:"name"`
 	FunctionName string `yaml:"function"`
@@ -32,7 +24,7 @@ type Conf struct {
 }
 
 func (c *Conf) getAnonymizingFunc(name string) (AnonymizingFunction, error) {
-	f := functions[name]
+	f := anonymizingFunctions[name]
 	if f != nil {
 		return f, nil
 	}

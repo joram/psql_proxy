@@ -32,17 +32,19 @@ func NewServer() (*Server, error) {
 	if err != nil {
 		log.Fatal(err)
 	}
+	fmt.Printf("proxying to %s\n", config.ServerURI)
 
 	return &Server{
 		config:  config,
 		port:    config.Port,
-		address: fmt.Sprintf("127.0.0.1:%d", config.Port),
+		address: fmt.Sprintf("0.0.0.0:%d", config.Port),
 		db:      db,
 		dbURL:   config.ServerURI,
 	}, nil
 }
 
 func (s *Server) Run() error {
+	fmt.Printf("Listening to %s\n", s.address)
 	return wire.ListenAndServe(s.address, s.handler)
 }
 
@@ -119,6 +121,7 @@ func (s *Server) defaultHandler(_ context.Context, query string) QueryFuncs {
 	f := func(ctx context.Context, writer wire.DataWriter, parameters []string) error {
 		_, err := s.db.Exec(query)
 		if err != nil {
+			fmt.Printf(err.Error())
 			return err
 		}
 		return writer.Complete("OK")
@@ -142,6 +145,7 @@ func (s *Server) handler(ctx context.Context, query string) (wire.PreparedStatem
 	queryFuncs := handlers[getQueryType(query)]
 	columns, err := queryFuncs.queryColumnsHandler(ctx, query)
 	if err != nil {
+		fmt.Printf("error! %s\n", err.Error())
 		return nil, nil, nil, err
 	}
 

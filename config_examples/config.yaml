@@ -1,13 +1,17 @@
 port: 8080
-server_uri: postgres://postgres:postgres@localhost:5432/postgres?sslmode=disable
+server_uri: postgres://postgres:postgres@postgres:5432/postgres?sslmode=disable
 columns:
   - name: email
     function: email
+
   - name: password
     function: password.stars
+
   - name: first_name
-    function: name.first.dwarf
+    function: name.first
+
   - name: middle_name
-    function: name.middle.dwarf
+    function: name.middle
+
   - name: last_name
-    function: name.last.dwarf
+    function: name.last

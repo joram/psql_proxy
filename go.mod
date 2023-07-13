@@ -9,6 +9,7 @@ require (
 )
 
 require (
+	github.com/goombaio/namegenerator v0.0.0-20181006234301-989e774b106e // indirect
 	github.com/jackc/pgio v1.0.0 // indirect
 	github.com/jackc/pgtype v1.14.0 // indirect
 	go.uber.org/atomic v1.11.0 // indirect
