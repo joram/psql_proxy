@@ -19,4 +19,4 @@ bash:
 	docker run -v ./config_examples/config.yaml:/config.yaml joram87/psql_anonymizing_proxy bash
 
 run_docker: build
-	docker run -v ./config_examples/config.yaml:/config.yaml joram87/psql_anonymizing_proxy
+	docker compose run proxy

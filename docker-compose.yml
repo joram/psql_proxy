@@ -6,6 +6,7 @@ volumes:
 services:
 
   postgres:
+    container_name: postgres
     image: postgres:15.3
     volumes:
       - postgres:/var/lib/postgresql/data
@@ -13,4 +14,11 @@ services:
       - '5432:5432'
     environment:
       POSTGRES_PASSWORD: 'postgres'
-#    command: postgres -c log_min_messages=INFO -c log_statement=all
+
+  proxy:
+    container_name: proxy
+    image: joram87/psql_anonymizing_proxy
+    volumes:
+      - ./config_examples/config.yaml:/config.yaml
+    ports:
+      - "8080:8080"

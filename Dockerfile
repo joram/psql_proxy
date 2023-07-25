@@ -14,4 +14,5 @@ RUN CGO_ENABLED=0 go build -a -installsuffix cgo -o app .
 # RUNNING IMAGE
 FROM alpine:3.14
 COPY --from=builder /go/src/github.com/joram/psql_proxy/app /
+EXPOSE 8080
 ENTRYPOINT ["/app"]
